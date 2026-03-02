@@ -1,0 +1,691 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cozy Crossing</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #1a1a2e; overflow: hidden; font-family: 'Segoe UI', sans-serif; }
+canvas { display: block; }
+#location {
+  position: fixed; top: 16px; left: 50%; transform: translateX(-50%);
+  background: rgba(0,0,0,0.45); color: #fff; padding: 6px 18px;
+  border-radius: 20px; font-size: 14px; pointer-events: none;
+  backdrop-filter: blur(4px); letter-spacing: 0.05em;
+}
+#hint {
+  position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+  background: rgba(0,0,0,0.6); color: #fff; padding: 8px 20px;
+  border-radius: 20px; font-size: 13px; display: none; pointer-events: none;
+}
+#msg {
+  position: fixed; bottom: 70px; left: 50%; transform: translateX(-50%);
+  background: rgba(255,210,80,0.93); color: #333; padding: 9px 20px;
+  border-radius: 20px; font-size: 14px; display: none; pointer-events: none;
+  font-weight: 600; box-shadow: 0 2px 12px rgba(0,0,0,0.2);
+}
+#controls {
+  position: fixed; bottom: 14px; right: 16px;
+  background: rgba(0,0,0,0.45); color: #bbb; padding: 10px 14px;
+  border-radius: 12px; font-size: 11px; line-height: 1.9; pointer-events: none;
+}
+#inventory {
+  position: fixed; top: 16px; right: 16px;
+  background: rgba(0,0,0,0.45); color: #fff; padding: 8px 14px;
+  border-radius: 12px; font-size: 12px; pointer-events: none; display: none;
+}
+</style>
+</head>
+<body>
+<div id="location">🌿 Cozy Garden</div>
+<div id="hint"></div>
+<div id="msg"></div>
+<div id="inventory">★ Golden Star</div>
+<div id="controls">WASD / ↑↓←→ — Move<br>E — Interact</div>
+
+<script type="importmap">
+{"imports":{"three":"https://unpkg.com/three@0.160.0/build/three.module.js"}}
+</script>
+<script type="module">
+import * as THREE from 'three';
+
+// ── CONFIG ────────────────────────────────────────────────────────────────
+const SPEED      = 4.2;
+const CAM_OFFSET = new THREE.Vector3(0, 11, 9);
+
+// ── PALETTE ───────────────────────────────────────────────────────────────
+const P = {
+  sky:       0x87CEEB, skyFog:  0xb0dff0,
+  skyIn:     0xfff5e4,
+  ground:    0x6dba43, grass2:  0x55a532,
+  path:      0xe2cfa0,
+  wall:      0xf5e6c8, roof:    0xc0392b,
+  door:      0x8b5e3c, trim:    0xdeb887,
+  win:       0xadd8e6,
+  trunk:     0x795548, leaf:    0x4caf50, leaf2: 0x388e3c,
+  fence:     0xf5f0e0,
+  flR:       0xff6b6b, flY: 0xffd93d, flP: 0xcc99ff, stem: 0x66bb6a,
+  floorA:    0xd4a96a, floorB: 0xc4995a,
+  wallIn:    0xfff8e7, wallInD: 0xf0e0c8,
+  bed:       0x6d4c41, sheet: 0xbbdefb,
+  table:     0x8d6e63, chair:   0xa1887f,
+  rug:       0xe53935,
+  book0:     0xff5252, book1:  0x448aff, book2: 0x69f0ae, book3: 0xffab40, book4: 0xea80fc,
+  plant:     0x43a047, pot:    0xc17f3e,
+  gold:      0xffd700,
+};
+
+// ── RENDERER / CAMERA ─────────────────────────────────────────────────────
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(devicePixelRatio);
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+
+const camera = new THREE.PerspectiveCamera(52, innerWidth / innerHeight, 0.1, 200);
+window.addEventListener('resize', () => {
+  renderer.setSize(innerWidth, innerHeight);
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+});
+
+// ── HELPERS ───────────────────────────────────────────────────────────────
+const lm  = c => new THREE.MeshLambertMaterial({ color: c });
+const bm  = c => new THREE.MeshBasicMaterial({ color: c });
+
+function box(w, h, d, color, parent) {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), lm(color));
+  m.castShadow = m.receiveShadow = true;
+  parent?.add(m);
+  return m;
+}
+function cyl(rt, rb, h, color, parent, segs = 8) {
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(rt, rb, h, segs), lm(color));
+  m.castShadow = true;
+  parent?.add(m);
+  return m;
+}
+function cone(r, h, color, parent, segs = 8) {
+  const m = new THREE.Mesh(new THREE.ConeGeometry(r, h, segs), lm(color));
+  m.castShadow = true;
+  parent?.add(m);
+  return m;
+}
+function sphere(r, color, parent, s = 6) {
+  const m = new THREE.Mesh(new THREE.SphereGeometry(r, s, s), lm(color));
+  parent?.add(m);
+  return m;
+}
+
+function addLight(scene, indoor) {
+  scene.add(new THREE.AmbientLight(indoor ? 0xfff0d8 : 0xffffff, indoor ? 0.75 : 0.55));
+  const sun = new THREE.DirectionalLight(indoor ? 0xffe4b0 : 0xfff8f0, indoor ? 0.7 : 1.1);
+  sun.position.set(12, 20, 12);
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(1024, 1024);
+  Object.assign(sun.shadow.camera, { left: -22, right: 22, top: 22, bottom: -22, near: 0.5, far: 70 });
+  scene.add(sun);
+}
+
+// ── SCENES ────────────────────────────────────────────────────────────────
+const extScene = new THREE.Scene();
+extScene.background = new THREE.Color(P.sky);
+extScene.fog = new THREE.Fog(P.skyFog, 30, 65);
+addLight(extScene, false);
+
+const intScene = new THREE.Scene();
+intScene.background = new THREE.Color(P.skyIn);
+addLight(intScene, true);
+
+// ── EXTERIOR ──────────────────────────────────────────────────────────────
+function buildExterior() {
+  // Ground
+  const gnd = new THREE.Mesh(new THREE.PlaneGeometry(42, 42), lm(P.ground));
+  gnd.rotation.x = -Math.PI / 2;
+  gnd.receiveShadow = true;
+  extScene.add(gnd);
+
+  // Grass variation patches
+  for (let i = 0; i < 35; i++) {
+    const p = new THREE.Mesh(new THREE.PlaneGeometry(0.7 + Math.random(), 0.7 + Math.random()), lm(P.grass2));
+    p.rotation.x = -Math.PI / 2;
+    p.position.set((Math.random() - 0.5) * 34, 0.01, (Math.random() - 0.5) * 34);
+    extScene.add(p);
+  }
+
+  // Stone path
+  const pathMat = lm(P.path);
+  for (let z = -2; z <= 7; z++) {
+    for (let x = -1; x <= 1; x++) {
+      const stone = new THREE.Mesh(new THREE.BoxGeometry(0.88, 0.06, 0.88), pathMat);
+      stone.position.set(x, 0.03, z);
+      stone.receiveShadow = true;
+      extScene.add(stone);
+    }
+  }
+
+  buildHouseExterior();
+  buildFence();
+  buildTrees();
+  buildFlowers();
+  buildMailbox();
+  buildBench();
+  buildWell();
+}
+
+function buildHouseExterior() {
+  const g = new THREE.Group();
+  g.position.set(0, 0, -6);
+  extScene.add(g);
+
+  // Foundation
+  const base = box(7.2, 0.32, 6.2, P.trim, g);
+  base.position.set(0, 0.16, 0);
+
+  // Walls
+  box(7, 3.6, 6, P.wall, g).position.set(0, 2.0, 0);
+
+  // Roof (pyramid with 4 sides)
+  const roofGeo = new THREE.ConeGeometry(5.4, 2.6, 4);
+  const roofMesh = new THREE.Mesh(roofGeo, lm(P.roof));
+  roofMesh.rotation.y = Math.PI / 4;
+  roofMesh.position.set(0, 4.5, 0);
+  roofMesh.castShadow = true;
+  g.add(roofMesh);
+
+  // Roof eave trim
+  box(7.3, 0.18, 6.3, P.trim, g).position.set(0, 3.3, 0);
+
+  // Chimney
+  box(0.72, 1.9, 0.72, 0x888888, g).position.set(2.1, 5.3, -1);
+  box(0.95, 0.22, 0.95, 0x666666, g).position.set(2.1, 6.3, -1);
+
+  // Front door
+  box(1.05, 2.05, 0.18, P.door, g).position.set(0, 1.3, 3.1);
+  // Door frame
+  box(0.12, 2.25, 0.14, P.trim, g).position.set(-0.6, 1.3, 3.15);
+  box(0.12, 2.25, 0.14, P.trim, g).position.set( 0.6, 1.3, 3.15);
+  box(1.35, 0.14, 0.14, P.trim, g).position.set(0, 2.5, 3.15);
+  // Knob
+  sphere(0.09, P.gold, g).position.set(0.37, 1.2, 3.22);
+
+  // Step
+  box(1.5, 0.14, 0.65, P.trim, g).position.set(0, 0.07, 3.55);
+
+  // Front windows
+  [-2.2, 2.2].forEach(xOff => {
+    box(1.25, 0.14, 0.14, P.trim, g).position.set(xOff, 2.25, 3.15);
+    box(1.25, 1.25, 0.14, P.trim, g).position.set(xOff, 2.2, 3.1);
+    box(1.05, 1.05, 0.12, P.win,  g).position.set(xOff, 2.2, 3.14);
+    box(1.05, 0.09, 0.15, P.trim, g).position.set(xOff, 2.2, 3.12);
+    box(0.09, 1.05, 0.15, P.trim, g).position.set(xOff, 2.2, 3.12);
+    // Flower box
+    box(1.3, 0.26, 0.38, P.trim, g).position.set(xOff, 1.55, 3.12);
+    [-0.4, 0, 0.4].forEach(dx => {
+      const col = [P.flR, P.flY, P.flP][Math.floor(Math.random() * 3)];
+      box(0.14, 0.3, 0.14, col, g).position.set(xOff + dx, 1.84, 3.14);
+    });
+  });
+
+  // Side windows
+  [-3.12, 3.12].forEach(xSide => {
+    box(0.14, 1.1, 1.1, P.trim, g).position.set(xSide, 2.2, 0);
+    box(0.12, 0.95, 0.95, P.win, g).position.set(xSide, 2.2, 0);
+  });
+}
+
+function buildFence() {
+  function section(x1, z1, x2, z2) {
+    const dx = x2 - x1, dz = z2 - z1;
+    const len = Math.sqrt(dx * dx + dz * dz);
+    const steps = Math.max(1, Math.ceil(len / 2));
+    const angle = Math.atan2(dx, dz);
+    const segLen = len / steps;
+
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps;
+      const post = box(0.16, 1.25, 0.16, P.fence, extScene);
+      post.position.set(x1 + dx * t, 0.625, z1 + dz * t);
+    }
+    for (let i = 0; i < steps; i++) {
+      const t = (i + 0.5) / steps;
+      [0.38, 0.78].forEach(ry => {
+        const rail = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.11, segLen), lm(P.fence));
+        rail.position.set(x1 + dx * t, ry, z1 + dz * t);
+        rail.rotation.y = angle;
+        extScene.add(rail);
+      });
+    }
+  }
+
+  section(-10,  8, -10, -10);
+  section(-10, -10, 10, -10);
+  section( 10, -10, 10,   8);
+  section( 10,   8,  2.6,  8);
+  section(-2.6,  8, -10,   8);
+
+  // Gold gate posts
+  [-2.6, 2.6].forEach(x => {
+    const gp = box(0.22, 1.6, 0.22, P.gold, extScene);
+    gp.position.set(x, 0.8, 8);
+    const ball = sphere(0.2, P.gold, extScene);
+    ball.position.set(x, 1.7, 8);
+  });
+}
+
+function buildTrees() {
+  function tree(x, z) {
+    const scale = 0.85 + Math.random() * 0.4;
+    const trunkH = 1.4 * scale;
+    const trunk = cyl(0.22, 0.32, trunkH, P.trunk, extScene);
+    trunk.position.set(x, trunkH / 2, z);
+    const colors = [P.leaf, P.leaf2];
+    for (let i = 0; i < 3; i++) {
+      const lh = (1.5 - i * 0.15) * scale;
+      const lr = (1.8 - i * 0.4) * scale;
+      const leaf = cone(lr, lh, colors[i % 2], extScene, 7);
+      leaf.position.set(x, trunkH + 0.3 * scale + i * lh * 0.55, z);
+    }
+  }
+
+  [[-7,-7],[-7,0],[-7,5],[7,-7],[7,0],[7,5],[-5,-8],[5,-8],[-8,-2],[8,-2],[0,-9],[4,6],[-4,6]]
+    .forEach(([x, z]) => tree(x, z));
+}
+
+function buildFlowers() {
+  const cols = [P.flR, P.flY, P.flP];
+  const spots = [[3,4],[-3,4],[4,1],[-4,1],[3,-2],[-3,-2],[5,-5],[-5,-5],[2,7],[-2,7],[6,3],[-6,3]];
+  spots.forEach(([cx, cz]) => {
+    for (let i = 0; i < 4; i++) {
+      const x = cx + (Math.random() - 0.5) * 1.6;
+      const z = cz + (Math.random() - 0.5) * 1.6;
+      const col = cols[Math.floor(Math.random() * 3)];
+      const stem = cyl(0.04, 0.04, 0.38, P.stem, extScene, 5);
+      stem.position.set(x, 0.19, z);
+      const bloom = cyl(0.2, 0.18, 0.09, col, extScene, 7);
+      bloom.position.set(x, 0.44, z);
+      sphere(0.09, 0xffeb3b, extScene).position.set(x, 0.5, z);
+    }
+  });
+}
+
+function buildMailbox() {
+  const g = new THREE.Group();
+  g.position.set(3.2, 0, 6.5);
+  extScene.add(g);
+  box(0.15, 1.2, 0.15, P.trim, g).position.set(0, 0.6, 0);
+  box(0.62, 0.42, 0.42, P.roof, g).position.set(0, 1.41, 0);
+  box(0.64, 0.09, 0.44, 0x8b0000, g).position.set(0, 1.66, 0);
+  box(0.07, 0.55, 0.07, 0x666666, g).position.set(-0.37, 1.53, 0);
+  box(0.32, 0.22, 0.07, 0xff0000, g).position.set(-0.22, 1.75, 0);
+}
+
+function buildBench() {
+  const g = new THREE.Group();
+  g.position.set(-4.5, 0, 3);
+  g.rotation.y = Math.PI / 6;
+  extScene.add(g);
+  box(1.6, 0.1, 0.45, P.trim, g).position.set(0, 0.52, 0);
+  box(1.6, 0.55, 0.1, P.trim, g).position.set(0, 0.8, -0.2);
+  [-0.65, 0.65].forEach(x => {
+    box(0.12, 0.55, 0.42, P.trim, g).position.set(x, 0.27, 0);
+  });
+}
+
+function buildWell() {
+  const g = new THREE.Group();
+  g.position.set(5, 0, -3);
+  extScene.add(g);
+  cyl(0.7, 0.7, 0.8, 0x9e9e9e, g).position.set(0, 0.4, 0);
+  cyl(0.68, 0.68, 0.1, 0x64b5f6, g).position.set(0, 0.85, 0);
+  box(0.08, 1.5, 0.08, P.trunk, g).position.set(-0.8, 1.05, 0);
+  box(0.08, 1.5, 0.08, P.trunk, g).position.set( 0.8, 1.05, 0);
+  box(1.6, 0.12, 0.6, P.trunk, g).position.set(0, 1.82, 0);
+  cone(0.95, 0.8, P.roof, g, 4).rotation.y = Math.PI / 4;
+  const rc = new THREE.Mesh(new THREE.ConeGeometry(0.95, 0.8, 4), lm(P.roof));
+  rc.rotation.y = Math.PI / 4;
+  rc.position.set(0, 2.22, 0);
+  g.add(rc);
+}
+
+// ── INTERIOR ──────────────────────────────────────────────────────────────
+let pickupMesh = null;
+let hasItem    = false;
+
+function buildInterior() {
+  const W = 7, D = 6, H = 3.6;
+
+  // Checkerboard floor
+  for (let i = 0; i < W; i++) {
+    for (let j = 0; j < D; j++) {
+      const col = (i + j) % 2 === 0 ? P.floorA : P.floorB;
+      const t = box(1, 0.1, 1, col, intScene);
+      t.position.set(i - W / 2 + 0.5, 0.05, j - D / 2 + 0.5);
+    }
+  }
+
+  // Rug
+  box(3.2, 0.07, 2.2, 0xffcdd2, intScene).position.set(0, 0.11, 0.5);
+  box(3.0, 0.07, 2.0, P.rug,    intScene).position.set(0, 0.12, 0.5);
+
+  // Walls
+  box(W, H, 0.2, P.wallIn,  intScene).position.set(0, H / 2, -D / 2);
+  box(0.2, H, D, P.wallInD, intScene).position.set(-W / 2, H / 2, 0);
+  box(0.2, H, D, P.wallInD, intScene).position.set( W / 2, H / 2, 0);
+  // Front wall with door gap
+  box(2.4, H, 0.2, P.wallIn, intScene).position.set(-2.3, H / 2, D / 2);
+  box(2.4, H, 0.2, P.wallIn, intScene).position.set( 2.3, H / 2, D / 2);
+  box(2.0, H - 2.1, 0.2, P.wallIn, intScene).position.set(0, 2.15 + (H - 2.1) / 2, D / 2);
+  // Ceiling
+  box(W, 0.14, D, P.wallInD, intScene).position.set(0, H, 0);
+
+  // Wallpaper stripes (back wall)
+  for (let i = -3; i <= 3; i++) {
+    box(0.13, H - 0.5, 0.06, P.trim, intScene).position.set(i, H / 2 + 0.25, -D / 2 + 0.14);
+  }
+
+  // Door mat
+  box(1.3, 0.06, 0.75, 0x8d6e63, intScene).position.set(0, 0.09, D / 2 - 0.5);
+
+  // Ceiling lamp
+  box(0.45, 0.1, 0.45, P.trim, intScene).position.set(0, H - 0.18, 0);
+  cyl(0.14, 0.26, 0.32, 0xfff9c4, intScene).position.set(0, H - 0.46, 0);
+  const pl = new THREE.PointLight(0xfff0d0, 1.3, 13);
+  pl.position.set(0, H - 0.5, 0);
+  intScene.add(pl);
+
+  // ── Bed ───────────────────────────────────────────────────────────────
+  const bedG = new THREE.Group();
+  bedG.position.set(2.3, 0, -2.0);
+  intScene.add(bedG);
+  box(2.1, 0.42, 1.2, P.bed, bedG).position.set(0, 0.21, 0);
+  box(2.0, 0.22, 1.1, P.sheet, bedG).position.set(0, 0.53, 0);
+  box(0.55, 0.18, 0.42, 0xffffff, bedG).position.set(0.65, 0.67, 0);
+  box(1.3, 0.13, 1.0, 0x90caf9, bedG).position.set(-0.2, 0.67, 0);
+  box(2.12, 0.85, 0.14, P.bed, bedG).position.set(0, 0.63, -0.65);
+
+  // ── Table ─────────────────────────────────────────────────────────────
+  const tabG = new THREE.Group();
+  tabG.position.set(-1.6, 0, 0.8);
+  intScene.add(tabG);
+  box(1.45, 0.1, 0.95, P.table, tabG).position.set(0, 0.75, 0);
+  [-0.57, 0.57].forEach(x => [-0.38, 0.38].forEach(z => {
+    box(0.1, 0.75, 0.1, P.table, tabG).position.set(x, 0.375, z);
+  }));
+
+  // ── Chair ─────────────────────────────────────────────────────────────
+  const chG = new THREE.Group();
+  chG.position.set(-1.6, 0, 2.0);
+  intScene.add(chG);
+  box(0.62, 0.1, 0.62, P.chair, chG).position.set(0, 0.5, 0);
+  box(0.62, 0.52, 0.09, P.chair, chG).position.set(0, 0.8, -0.26);
+  [-0.25, 0.25].forEach(x => [-0.25, 0.25].forEach(z => {
+    box(0.09, 0.5, 0.09, P.chair, chG).position.set(x, 0.25, z);
+  }));
+
+  // ── Bookshelf ─────────────────────────────────────────────────────────
+  const shG = new THREE.Group();
+  shG.position.set(-3.25, 0, -1.6);
+  intScene.add(shG);
+  box(0.5, 2.6, 1.5, P.bed, shG).position.set(0, 1.3, 0);
+  const bookCols = [P.book0, P.book1, P.book2, P.book3, P.book4];
+  for (let row = 0; row < 3; row++) {
+    let bz = -0.6;
+    for (let b = 0; b < 5; b++) {
+      const bw = 0.1 + Math.random() * 0.06;
+      const bh = 0.36 + Math.random() * 0.1;
+      const bk = box(0.22, bh, bw, bookCols[b], shG);
+      bk.position.set(0.14, 0.5 + row * 0.78, bz + bw / 2);
+      bz += bw + 0.02;
+    }
+  }
+
+  // ── Potted plant ──────────────────────────────────────────────────────
+  const plG = new THREE.Group();
+  plG.position.set(2.9, 0, -2.6);
+  intScene.add(plG);
+  cyl(0.21, 0.28, 0.42, P.pot, plG).position.set(0, 0.21, 0);
+  cyl(0.21, 0.21, 0.06, 0x4e342e, plG).position.set(0, 0.45, 0);
+  cone(0.38, 0.65, P.plant, plG, 7).position.set(0, 0.85, 0);
+
+  // ── Wall painting ─────────────────────────────────────────────────────
+  box(1.8, 1.2, 0.06, 0xfff9c4, intScene).position.set(-2, 2.5, -D / 2 + 0.1);
+  box(1.6, 1.0, 0.07, 0x64b5f6, intScene).position.set(-2, 2.5, -D / 2 + 0.12);
+
+  // ── Pickupable item: golden star on table ─────────────────────────────
+  const starG = new THREE.Group();
+  starG.position.set(-1.6, 0.9, 0.8);
+  intScene.add(starG);
+  pickupMesh = starG;
+
+  const star = new THREE.Mesh(new THREE.OctahedronGeometry(0.2), lm(P.gold));
+  starG.add(star);
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.24, 0.035, 6, 14), lm(0xffec8b));
+  ring.rotation.x = Math.PI / 2;
+  starG.add(ring);
+}
+
+// ── PLAYER ────────────────────────────────────────────────────────────────
+function createPlayer(scene) {
+  const g = new THREE.Group();
+
+  const body  = box(0.52, 0.72, 0.36, 0x4FC3F7, g);  body.position.set(0, 0.72, 0);
+  const legL  = box(0.22, 0.58, 0.22, 0x5C6BC0, g);  legL.position.set(-0.14, 0.28, 0);
+  const legR  = box(0.22, 0.58, 0.22, 0x5C6BC0, g);  legR.position.set( 0.14, 0.28, 0);
+  const armL  = box(0.17, 0.52, 0.17, 0x4FC3F7, g);  armL.position.set(-0.37, 0.72, 0);
+  const armR  = box(0.17, 0.52, 0.17, 0x4FC3F7, g);  armR.position.set( 0.37, 0.72, 0);
+  const head  = box(0.46, 0.46, 0.46, 0xFFCC80, g);  head.position.set(0, 1.28, 0);
+  box(0.1, 0.12, 0.06, 0x1a1a1a, g).position.set(-0.12, 1.33, 0.24);
+  box(0.1, 0.12, 0.06, 0x1a1a1a, g).position.set( 0.12, 1.33, 0.24);
+  box(0.48, 0.2, 0.48, 0x5D4037, g).position.set(0, 1.58, 0);
+  box(0.62, 0.09, 0.62, 0xFFD54F, g).position.set(0, 1.69, 0);
+  box(0.4, 0.32, 0.4, 0xFFD54F, g).position.set(0, 1.88, 0);
+  box(0.24, 0.15, 0.3, 0x4E342E, g).position.set(-0.14, 0.07, 0.04);
+  box(0.24, 0.15, 0.3, 0x4E342E, g).position.set( 0.14, 0.07, 0.04);
+
+  g.traverse(m => { if (m.isMesh) m.castShadow = true; });
+  scene.add(g);
+  return { g, legL, legR, armL, armR };
+}
+
+const pExt = createPlayer(extScene);
+const pInt = createPlayer(intScene);
+pExt.g.position.set(0, 0, 6);
+pInt.g.position.set(0, 0, 2.2);
+
+// ── INPUT ─────────────────────────────────────────────────────────────────
+const keys = {};
+window.addEventListener('keydown', e => { keys[e.code] = true; e.preventDefault(); });
+window.addEventListener('keyup',   e => { keys[e.code] = false; });
+
+// ── STATE ─────────────────────────────────────────────────────────────────
+let indoor    = false;
+let walkTime  = 0;
+let starAngle = 0;
+let eWasDown  = false;
+
+// ── TRIGGERS ──────────────────────────────────────────────────────────────
+const DOOR_EXT = new THREE.Vector3(0, 0, -2.8);
+const DOOR_INT = new THREE.Vector3(0, 0, 2.2);
+
+// Exterior house AABB (block walking through walls)
+const HOUSE = { minX: -3.8, maxX: 3.8, minZ: -9.5, maxZ: -3.3 };
+
+// ── UI HELPERS ────────────────────────────────────────────────────────────
+const hintEl  = document.getElementById('hint');
+const locEl   = document.getElementById('location');
+const msgEl   = document.getElementById('msg');
+const invEl   = document.getElementById('inventory');
+
+let msgTimer = null;
+function showMsg(txt) {
+  msgEl.textContent = txt;
+  msgEl.style.display = 'block';
+  if (msgTimer) clearTimeout(msgTimer);
+  msgTimer = setTimeout(() => { msgEl.style.display = 'none'; }, 3200);
+}
+
+// ── MOVEMENT ──────────────────────────────────────────────────────────────
+const _dir = new THREE.Vector3();
+const BOUNDS_EXT = { minX: -9.5, maxX: 9.5, minZ: -9.5, maxZ: 9.5 };
+const BOUNDS_INT = { minX: -3.0, maxX: 3.0, minZ: -2.4, maxZ: 2.6 };
+
+function movePlayer(player, bounds, dt) {
+  _dir.set(0, 0, 0);
+  if (keys['KeyW'] || keys['ArrowUp'])    _dir.z -= 1;
+  if (keys['KeyS'] || keys['ArrowDown'])  _dir.z += 1;
+  if (keys['KeyA'] || keys['ArrowLeft'])  _dir.x -= 1;
+  if (keys['KeyD'] || keys['ArrowRight']) _dir.x += 1;
+
+  const moving = _dir.lengthSq() > 0;
+  if (moving) {
+    _dir.normalize();
+    player.g.position.x += _dir.x * SPEED * dt;
+    player.g.position.z += _dir.z * SPEED * dt;
+    player.g.rotation.y  = Math.atan2(_dir.x, _dir.z);
+
+    // Clamp to scene bounds
+    const p = player.g.position;
+    p.x = Math.max(bounds.minX, Math.min(bounds.maxX, p.x));
+    p.z = Math.max(bounds.minZ, Math.min(bounds.maxZ, p.z));
+
+    // House collision (exterior only)
+    if (!indoor) {
+      const pp = player.g.position;
+      if (pp.x > HOUSE.minX && pp.x < HOUSE.maxX && pp.z > HOUSE.minZ && pp.z < HOUSE.maxZ) {
+        // Resolve by pushing back
+        const overlapL = pp.x - HOUSE.minX;
+        const overlapR = HOUSE.maxX - pp.x;
+        const overlapF = pp.z - HOUSE.minZ;
+        const overlapB = HOUSE.maxZ - pp.z;
+        const minO = Math.min(overlapL, overlapR, overlapF, overlapB);
+        if      (minO === overlapF) pp.z = HOUSE.minZ;
+        else if (minO === overlapB) pp.z = HOUSE.maxZ;
+        else if (minO === overlapL) pp.x = HOUSE.minX;
+        else                        pp.x = HOUSE.maxX;
+      }
+    }
+  }
+
+  // Walk animation
+  if (moving) {
+    walkTime += dt * 8;
+    const sw = Math.sin(walkTime) * 0.42;
+    player.legL.rotation.x =  sw;
+    player.legR.rotation.x = -sw;
+    player.armL.rotation.x = -sw * 0.55;
+    player.armR.rotation.x =  sw * 0.55;
+  } else {
+    player.legL.rotation.x *= 0.82;
+    player.legR.rotation.x *= 0.82;
+    player.armL.rotation.x *= 0.82;
+    player.armR.rotation.x *= 0.82;
+  }
+}
+
+// ── INTERACTION ───────────────────────────────────────────────────────────
+function handleInteract() {
+  const eDown = keys['KeyE'];
+  if (!eDown || eWasDown) { eWasDown = eDown; return; }
+  eWasDown = true;
+
+  if (!indoor) {
+    if (pExt.g.position.distanceTo(DOOR_EXT) < 2.2) enterHouse();
+  } else {
+    if (pInt.g.position.distanceTo(DOOR_INT) < 1.6) { exitHouse(); return; }
+    if (!hasItem && pickupMesh) {
+      const sw = new THREE.Vector3();
+      pickupMesh.getWorldPosition(sw);
+      if (pInt.g.position.distanceTo(sw) < 1.3) {
+        hasItem = true;
+        intScene.remove(pickupMesh);
+        pickupMesh = null;
+        showMsg('You found the Golden Star! ★');
+        invEl.style.display = 'block';
+      }
+    }
+  }
+}
+
+function enterHouse() {
+  indoor = true;
+  pInt.g.position.set(0, 0, 2.0);
+  pInt.g.rotation.y = 0;
+  locEl.textContent = '🏠 Inside Your House';
+  showMsg('Welcome home! Press E near the door to leave.');
+}
+function exitHouse() {
+  indoor = false;
+  pExt.g.position.set(0, 0, -2.5);
+  pExt.g.rotation.y = Math.PI;
+  locEl.textContent = '🌿 Cozy Garden';
+}
+
+// ── HINTS ─────────────────────────────────────────────────────────────────
+function updateHints() {
+  let hint = '';
+  if (!indoor) {
+    if (pExt.g.position.distanceTo(DOOR_EXT) < 2.2) hint = 'Press E to enter the house';
+  } else {
+    if (pInt.g.position.distanceTo(DOOR_INT) < 1.6) {
+      hint = 'Press E to go outside';
+    } else if (!hasItem && pickupMesh) {
+      const sw = new THREE.Vector3();
+      pickupMesh.getWorldPosition(sw);
+      if (pInt.g.position.distanceTo(sw) < 1.6) hint = 'Press E to pick up the golden star';
+    }
+  }
+  hintEl.textContent = hint;
+  hintEl.style.display = hint ? 'block' : 'none';
+}
+
+// ── CAMERA ────────────────────────────────────────────────────────────────
+function updateCamera(pg) {
+  const t = pg.position.clone();
+  camera.position.lerp(t.clone().add(CAM_OFFSET), 0.1);
+  camera.lookAt(t.x, t.y + 1, t.z);
+}
+
+// ── ANIMATE ITEMS ─────────────────────────────────────────────────────────
+function animateItems(dt) {
+  if (pickupMesh) {
+    starAngle += dt * 2.2;
+    pickupMesh.rotation.y  = starAngle;
+    pickupMesh.position.y  = 0.9 + Math.sin(starAngle * 1.6) * 0.07;
+  }
+}
+
+// ── LOOP ──────────────────────────────────────────────────────────────────
+let lastT = performance.now();
+function tick() {
+  requestAnimationFrame(tick);
+  const now = performance.now();
+  const dt  = Math.min((now - lastT) / 1000, 0.05);
+  lastT = now;
+
+  if (indoor) {
+    movePlayer(pInt, BOUNDS_INT, dt);
+    updateCamera(pInt.g);
+    animateItems(dt);
+    renderer.render(intScene, camera);
+  } else {
+    movePlayer(pExt, BOUNDS_EXT, dt);
+    updateCamera(pExt.g);
+    renderer.render(extScene, camera);
+  }
+
+  handleInteract();
+  updateHints();
+}
+
+// ── INIT ──────────────────────────────────────────────────────────────────
+buildExterior();
+buildInterior();
+camera.position.copy(pExt.g.position.clone().add(CAM_OFFSET));
+camera.lookAt(pExt.g.position);
+tick();
+</script>
+</body>
+</html>
