@@ -469,9 +469,20 @@ function loadCharacter() {
       barEl.style.width = '100%';
 
       const model = gltf.scene;
-      model.scale.setScalar(MODEL_SCALE);
-      model.rotation.y = MODEL_FACE;
       model.traverse(m => { if (m.isMesh) m.castShadow = true; });
+
+      // Auto-scale: the char_LP node has scale=100 AND translation y=183
+      // so hardcoding MODEL_SCALE is wrong — measure the real bounding box instead.
+      const bbox = new THREE.Box3().setFromObject(model);
+      const height = bbox.max.y - bbox.min.y;
+      const sc = 1.8 / height;           // target: 1.8 units tall
+      model.scale.setScalar(sc);
+
+      // Recompute after scaling and shift model so feet sit at y=0
+      bbox.setFromObject(model);
+      model.position.y = -bbox.min.y;
+
+      model.rotation.y = MODEL_FACE;
       playerGroup.add(model);
 
       // AnimationMixer — the single "Scene" clip is the walk cycle
