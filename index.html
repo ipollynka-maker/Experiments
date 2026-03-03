@@ -49,6 +49,18 @@ canvas { display: block; }
   background: rgba(0,0,0,0.35); color: #999; padding: 6px 10px;
   border-radius: 8px; font-size: 10px; pointer-events: none; max-width: 260px; line-height: 1.5;
 }
+#debug-door {
+  position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  background: rgba(200,0,0,0.85); color: #fff; padding: 10px 18px;
+  border-radius: 12px; font-size: 12px; pointer-events: none;
+  font-family: monospace; line-height: 1.8; display: none; text-align: center;
+}
+#debug-bed {
+  position: fixed; top: 16px; left: 50%; transform: translateX(-50%);
+  background: rgba(0,100,200,0.88); color: #fff; padding: 10px 18px;
+  border-radius: 12px; font-size: 12px; pointer-events: none;
+  font-family: monospace; line-height: 1.8; display: none; text-align: center;
+}
 </style>
 </head>
 <body>
@@ -61,6 +73,8 @@ canvas { display: block; }
 <div id="location">🌿 Cozy Garden</div>
 <div id="hint"></div>
 <div id="msg"></div>
+<div id="debug-door"></div>
+<div id="debug-bed"></div>
 <div id="inventory">★ Golden Star</div>
 <div id="controls">WASD / ↑↓←→ — Move<br>E — Interact</div>
 <div id="credit">Character: "Animal crossing character" by Mua (sketchfab.com/mualab) — CC-BY-4.0<br>Scene: "Animal crossing" by minlibi (sketchfab.com/minlibi) — CC-BY-4.0</div>
@@ -76,12 +90,18 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 // ── CONFIG ────────────────────────────────────────────────────────────────
-const SPEED      = 4.2;
-const CAM_OFFSET = new THREE.Vector3(0, 11, 9);
+const SPEED          = 4.2;
+const CAM_OFFSET_EXT = new THREE.Vector3(0, 11, 9);
+// Interior: sit above the open-top room, slightly toward the front, looking down
+const CAM_OFFSET_INT = new THREE.Vector3(0, 7, 3);
 // Model comes in at 100× scale internally; 0.01 brings it to ~2.6 units tall
 const MODEL_SCALE = 0.01;
 // Rotation to face +Z (adjust if character walks backward)
 const MODEL_FACE  = 0;
+// Set true to show a red wireframe sphere at the door trigger (tune & disable)
+const DEBUG_DOOR  = false;
+// Set true to show bed-position nudge HUD while resting (tune & disable)
+const DEBUG_BED   = false;
 
 // ── PALETTE ───────────────────────────────────────────────────────────────
 const P = {
@@ -179,94 +199,12 @@ function buildExterior() {
 // ── INTERIOR ──────────────────────────────────────────────────────────────
 let pickupMesh = null;
 let hasItem    = false;
+let BED_POS    = null;   // world position of the bed, set after room loads
+let resting    = false;  // true while player is on the bed
 
-function buildInterior() {
-  const W = 7, D = 6, H = 3.6;
-
-  for (let i = 0; i < W; i++) {
-    for (let j = 0; j < D; j++) {
-      const col = (i + j) % 2 === 0 ? P.floorA : P.floorB;
-      box(1, 0.1, 1, col, intScene).position.set(i - W / 2 + 0.5, 0.05, j - D / 2 + 0.5);
-    }
-  }
-
-  box(3.2, 0.07, 2.2, 0xffcdd2, intScene).position.set(0, 0.11, 0.5);
-  box(3.0, 0.07, 2.0, P.rug,    intScene).position.set(0, 0.12, 0.5);
-
-  box(W, H, 0.2, P.wallIn,  intScene).position.set(0, H / 2, -D / 2);
-  box(0.2, H, D, P.wallInD, intScene).position.set(-W / 2, H / 2, 0);
-  box(0.2, H, D, P.wallInD, intScene).position.set( W / 2, H / 2, 0);
-  box(2.4, H, 0.2, P.wallIn, intScene).position.set(-2.3, H / 2, D / 2);
-  box(2.4, H, 0.2, P.wallIn, intScene).position.set( 2.3, H / 2, D / 2);
-  box(2.0, H - 2.1, 0.2, P.wallIn, intScene).position.set(0, 2.15 + (H - 2.1) / 2, D / 2);
-  box(W, 0.14, D, P.wallInD, intScene).position.set(0, H, 0);
-
-  for (let i = -3; i <= 3; i++) {
-    box(0.13, H - 0.5, 0.06, P.trim, intScene).position.set(i, H / 2 + 0.25, -D / 2 + 0.14);
-  }
-
-  box(1.3, 0.06, 0.75, 0x8d6e63, intScene).position.set(0, 0.09, D / 2 - 0.5);
-
-  box(0.45, 0.1, 0.45, P.trim, intScene).position.set(0, H - 0.18, 0);
-  cyl(0.14, 0.26, 0.32, 0xfff9c4, intScene).position.set(0, H - 0.46, 0);
-  const pl = new THREE.PointLight(0xfff0d0, 1.3, 13);
-  pl.position.set(0, H - 0.5, 0);
-  intScene.add(pl);
-
-  const bedG = new THREE.Group();
-  bedG.position.set(2.3, 0, -2.0);
-  intScene.add(bedG);
-  box(2.1, 0.42, 1.2, P.bed, bedG).position.set(0, 0.21, 0);
-  box(2.0, 0.22, 1.1, P.sheet, bedG).position.set(0, 0.53, 0);
-  box(0.55, 0.18, 0.42, 0xffffff, bedG).position.set(0.65, 0.67, 0);
-  box(1.3, 0.13, 1.0, 0x90caf9, bedG).position.set(-0.2, 0.67, 0);
-  box(2.12, 0.85, 0.14, P.bed, bedG).position.set(0, 0.63, -0.65);
-
-  const tabG = new THREE.Group();
-  tabG.position.set(-1.6, 0, 0.8);
-  intScene.add(tabG);
-  box(1.45, 0.1, 0.95, P.table, tabG).position.set(0, 0.75, 0);
-  [-0.57, 0.57].forEach(x => [-0.38, 0.38].forEach(z => {
-    box(0.1, 0.75, 0.1, P.table, tabG).position.set(x, 0.375, z);
-  }));
-
-  const chG = new THREE.Group();
-  chG.position.set(-1.6, 0, 2.0);
-  intScene.add(chG);
-  box(0.62, 0.1, 0.62, P.chair, chG).position.set(0, 0.5, 0);
-  box(0.62, 0.52, 0.09, P.chair, chG).position.set(0, 0.8, -0.26);
-  [-0.25, 0.25].forEach(x => [-0.25, 0.25].forEach(z => {
-    box(0.09, 0.5, 0.09, P.chair, chG).position.set(x, 0.25, z);
-  }));
-
-  const shG = new THREE.Group();
-  shG.position.set(-3.25, 0, -1.6);
-  intScene.add(shG);
-  box(0.5, 2.6, 1.5, P.bed, shG).position.set(0, 1.3, 0);
-  const bookCols = [P.book0, P.book1, P.book2, P.book3, P.book4];
-  for (let row = 0; row < 3; row++) {
-    let bz = -0.6;
-    for (let b = 0; b < 5; b++) {
-      const bw = 0.1 + Math.random() * 0.06;
-      const bh = 0.36 + Math.random() * 0.1;
-      const bk = box(0.22, bh, bw, bookCols[b], shG);
-      bk.position.set(0.14, 0.5 + row * 0.78, bz + bw / 2);
-      bz += bw + 0.02;
-    }
-  }
-
-  const plG = new THREE.Group();
-  plG.position.set(2.9, 0, -2.6);
-  intScene.add(plG);
-  cyl(0.21, 0.28, 0.42, P.pot, plG).position.set(0, 0.21, 0);
-  cyl(0.21, 0.21, 0.06, 0x4e342e, plG).position.set(0, 0.45, 0);
-  cone(0.38, 0.65, P.plant, plG, 7).position.set(0, 0.85, 0);
-
-  box(1.8, 1.2, 0.06, 0xfff9c4, intScene).position.set(-2, 2.5, -D / 2 + 0.1);
-  box(1.6, 1.0, 0.07, 0x64b5f6, intScene).position.set(-2, 2.5, -D / 2 + 0.12);
-
+function spawnStar() {
   const starG = new THREE.Group();
-  starG.position.set(-1.6, 0.9, 0.8);
+  starG.position.set(0, 1.0, 0); // centre of room, floating — adjust if needed
   intScene.add(starG);
   pickupMesh = starG;
   const star = new THREE.Mesh(new THREE.OctahedronGeometry(0.2), lm(P.gold));
@@ -276,7 +214,102 @@ function buildInterior() {
   starG.add(ring);
 }
 
+function loadInterior(onDone) {
+  const loader = new GLTFLoader();
+  loader.load(
+    'cozy_room/scene.gltf',
+    (gltf) => {
+      const model = gltf.scene;
+      model.traverse(m => {
+        if (m.isMesh) { m.castShadow = true; m.receiveShadow = true; }
+      });
+
+      // Scale so the room is ~4 units tall — feels right for a 1.8-unit character
+      const bbox   = new THREE.Box3().setFromObject(model);
+      const hModel = bbox.max.y - bbox.min.y;
+      const sc     = 4 / hModel;
+      model.scale.setScalar(sc);
+
+      // Re-centre: floor at y=0, centred on X/Z
+      bbox.setFromObject(model);
+      model.position.x = -(bbox.min.x + bbox.max.x) / 2;
+      model.position.z = -(bbox.min.z + bbox.max.z) / 2;
+      model.position.y = -bbox.min.y;
+
+      intScene.add(model);
+
+      // Auto-compute walkable bounds from the room model (with a small inset)
+      const fb    = new THREE.Box3().setFromObject(model);
+      const inset = 0.4;
+      BOUNDS_INT.minX = fb.min.x + inset;
+      BOUNDS_INT.maxX = fb.max.x - inset;
+      BOUNDS_INT.minZ = fb.min.z + inset;
+      BOUNDS_INT.maxZ = fb.max.z - inset;
+      console.log('[CozyC] Interior bounds:', BOUNDS_INT);
+
+      // Auto-detect bed mesh
+      const bedKeywords = ['bed', 'mattress', 'pillow', 'sofa', 'couch', 'futon', 'sleep'];
+      let   bedMesh     = null;
+      model.traverse(m => {
+        if (!m.isMesh || bedMesh) return;
+        const n = m.name.toLowerCase();
+        if (bedKeywords.some(k => n.includes(k))) bedMesh = m;
+      });
+      if (bedMesh) {
+        const bedBbox = new THREE.Box3().setFromObject(bedMesh);
+        BED_SURFACE_Y = bedBbox.max.y;          // world Y of the top of the mattress
+        BED_POS = new THREE.Vector3();
+        bedMesh.getWorldPosition(BED_POS);
+        BED_POS.y = 0;                          // keep y=0 for horizontal distance check
+        console.log('[CozyC] Bed found:', bedMesh.name, '→ surface Y:', BED_SURFACE_Y.toFixed(3));
+      } else {
+        console.warn('[CozyC] No bed mesh found — set BED_POS manually if needed.');
+      }
+
+      spawnStar();
+      onDone();
+    },
+    undefined,
+    (err) => { console.error('Interior load error:', err); spawnStar(); onDone(); }
+  );
+}
+
 // ── ENVIRONMENT (GLTF) ────────────────────────────────────────────────────
+
+// After the model is placed, scan its meshes to locate the door trigger.
+// Priority: mesh with "door" / "entrance" / "entry" in its name.
+// Fallback: use the centre of the front face (min-Z edge) of the bounding box.
+function findDoorTrigger(model, sceneBbox) {
+  const wp  = new THREE.Vector3();
+  let doorMesh = null;
+
+  console.groupCollapsed('[CozyC] House mesh names (click to expand)');
+  model.traverse(m => {
+    if (!m.isMesh) return;
+    const n = m.name.toLowerCase();
+    console.log(m.name);
+    if (!doorMesh && (n.includes('door') || n.includes('entrance') || n.includes('entry') || n.includes('gate'))) {
+      doorMesh = m;
+    }
+  });
+  console.groupEnd();
+
+  if (doorMesh) {
+    doorMesh.getWorldPosition(wp);
+    wp.y = 0;
+    console.log('[CozyC] Door mesh found:', doorMesh.name, '→ trigger at', wp);
+    return wp;
+  }
+
+  // Fallback: centre-X, centre-Y=0, slightly in front of the nearest Z face
+  const cx = (sceneBbox.min.x + sceneBbox.max.x) / 2;
+  const fz = sceneBbox.min.z; // whichever face is closest to the player start
+  const fallback = new THREE.Vector3(cx, 0, fz + 1.8);
+  console.warn('[CozyC] No door mesh found. Using fallback trigger at', fallback,
+    '\nSet DEBUG_DOOR = true and adjust DOOR_EXT manually if needed.');
+  return fallback;
+}
+
 function loadEnvironment(onDone) {
   const loader = new GLTFLoader();
   loader.load(
@@ -287,10 +320,11 @@ function loadEnvironment(onDone) {
         if (m.isMesh) { m.castShadow = true; m.receiveShadow = true; }
       });
 
-      // Auto-scale: target width of 20 units across the scene
-      const bbox = new THREE.Box3().setFromObject(model);
-      const width = bbox.max.x - bbox.min.x;
-      const sc    = 20 / width;
+      // Auto-scale: target 8 units tall so the house always towers over the
+      // 1.8-unit character (~4.4× ratio), regardless of the model's aspect ratio.
+      const bbox   = new THREE.Box3().setFromObject(model);
+      const hModel = bbox.max.y - bbox.min.y;
+      const sc     = 8 / hModel;
       model.scale.setScalar(sc);
 
       // Re-measure after scale; center X/Z and floor Y at 0
@@ -300,6 +334,32 @@ function loadEnvironment(onDone) {
       model.position.y = -bbox.min.y;
 
       extScene.add(model);
+
+      // ── Auto-detect door trigger ──────────────────────────────────────
+      const finalBbox = new THREE.Box3().setFromObject(model);
+      DOOR_EXT = findDoorTrigger(model, finalBbox);
+      DOOR_EXT.set(-7.00, 0, -3.19); // tuned to actual door position
+
+      // ── Debug: show a moveable red marker at the trigger ────────────────
+      if (DEBUG_DOOR) {
+        _dbgSphere = new THREE.Mesh(
+          new THREE.SphereGeometry(0.4, 10, 10),
+          new THREE.MeshBasicMaterial({ color: 0xff2222, wireframe: true })
+        );
+        _dbgSphere.position.set(DOOR_EXT.x, 0.5, DOOR_EXT.z);
+        extScene.add(_dbgSphere);
+
+        _dbgCol = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.05, 0.05, 3, 6),
+          new THREE.MeshBasicMaterial({ color: 0xff2222 })
+        );
+        _dbgCol.position.set(DOOR_EXT.x, 1.5, DOOR_EXT.z);
+        extScene.add(_dbgCol);
+
+        initDebugDoorUI();
+        console.log('[CozyC] DEBUG_DOOR — use I/J/K/L to nudge the red marker onto the door. Set DEBUG_DOOR=false when happy.');
+      }
+
       onDone();
     },
     undefined,
@@ -314,16 +374,19 @@ const playerGroup = new THREE.Group();
 playerGroup.position.set(0, 0, 6);
 extScene.add(playerGroup);
 
-let mixer      = null;
-let walkAction = null;
+let mixer           = null;
+let walkAction      = null;
+let charModel       = null;  // direct ref to model inside playerGroup
+let _charModelOrigY = 0;     // saved foot-offset, restored after lying down
+let BED_SURFACE_Y   = 0.4;   // world Y of bed top surface, measured after room loads
 
 let _loadedCount = 0;
 function _onAssetLoaded() {
   _loadedCount++;
-  document.getElementById('loading-bar').style.width = (_loadedCount * 50) + '%';
-  if (_loadedCount < 2) return;
+  document.getElementById('loading-bar').style.width = (_loadedCount * 33) + '%';
+  if (_loadedCount < 3) return;
   document.getElementById('loading').style.display = 'none';
-  camera.position.copy(playerGroup.position.clone().add(CAM_OFFSET));
+  camera.position.copy(playerGroup.position.clone().add(CAM_OFFSET_EXT));
   camera.lookAt(playerGroup.position);
   tick();
 }
@@ -350,6 +413,8 @@ function loadCharacter() {
       model.position.y = -bbox.min.y;
 
       model.rotation.y = MODEL_FACE;
+      charModel = model;
+      _charModelOrigY = model.position.y; // save for restoring after lying
       playerGroup.add(model);
 
       // AnimationMixer — the single "Scene" clip is the walk cycle
@@ -377,22 +442,66 @@ const keys = {};
 window.addEventListener('keydown', e => { keys[e.code] = true; e.preventDefault(); });
 window.addEventListener('keyup',   e => { keys[e.code] = false; });
 
+// ── ORBIT CAMERA ──────────────────────────────────────────────────────────
+// Active only while resting; drag mouse / touch to look around the character.
+let orbitActive = false;
+let orbitTheta  = 1.2;   // horizontal angle (radians)
+let orbitPhi    = 1.0;   // vertical angle from top (radians, clamped 0.15–1.4)
+let ORBIT_R     = 2.8;   // distance from character (scroll to zoom)
+
+let _drag = false, _lastMX = 0, _lastMY = 0;
+
+function _orbitDrag(dx, dy) {
+  orbitTheta -= dx * 0.008;
+  orbitPhi    = Math.max(0.15, Math.min(1.4, orbitPhi - dy * 0.008));
+}
+
+window.addEventListener('mousedown', e => {
+  if (e.button === 0 && orbitActive) { _drag = true; _lastMX = e.clientX; _lastMY = e.clientY; }
+});
+window.addEventListener('mouseup',   () => _drag = false);
+window.addEventListener('mousemove', e => {
+  if (!_drag) return;
+  _orbitDrag(e.clientX - _lastMX, e.clientY - _lastMY);
+  _lastMX = e.clientX; _lastMY = e.clientY;
+});
+
+window.addEventListener('touchstart', e => {
+  if (!orbitActive) return;
+  _drag = true; _lastMX = e.touches[0].clientX; _lastMY = e.touches[0].clientY;
+}, { passive: true });
+window.addEventListener('touchend',   () => _drag = false);
+window.addEventListener('touchmove',  e => {
+  if (!_drag) return;
+  _orbitDrag(e.touches[0].clientX - _lastMX, e.touches[0].clientY - _lastMY);
+  _lastMX = e.touches[0].clientX; _lastMY = e.touches[0].clientY;
+}, { passive: true });
+
+window.addEventListener('wheel', e => {
+  if (!orbitActive) return;
+  ORBIT_R = Math.max(0.8, Math.min(8.0, ORBIT_R + e.deltaY * 0.01));
+  e.preventDefault();
+}, { passive: false });
+
 // ── STATE ─────────────────────────────────────────────────────────────────
 let indoor    = false;
 let starAngle = 0;
 let eWasDown  = false;
 
 // ── TRIGGERS ──────────────────────────────────────────────────────────────
-// Door trigger is tweaked after seeing the house model in-game;
-// start with a point slightly in front of where the house door appears.
-const DOOR_EXT = new THREE.Vector3(0, 0, -1.5);
+// Auto-set after the house GLTF loads (see findDoorTrigger).
+// Falls back to (0,0,0) until the model is ready.
+let DOOR_EXT = new THREE.Vector3(0, 0, 0);
 const DOOR_INT = new THREE.Vector3(0, 0, 2.2);
 
 // ── UI HELPERS ────────────────────────────────────────────────────────────
-const hintEl = document.getElementById('hint');
-const locEl  = document.getElementById('location');
-const msgEl  = document.getElementById('msg');
-const invEl  = document.getElementById('inventory');
+const hintEl      = document.getElementById('hint');
+const locEl       = document.getElementById('location');
+const msgEl       = document.getElementById('msg');
+const invEl       = document.getElementById('inventory');
+const debugDoorEl = document.getElementById('debug-door');
+const debugBedEl  = document.getElementById('debug-bed');
+const controlsEl  = document.getElementById('controls');
 
 let msgTimer = null;
 function showMsg(txt) {
@@ -402,12 +511,92 @@ function showMsg(txt) {
   msgTimer = setTimeout(() => { msgEl.style.display = 'none'; }, 3200);
 }
 
+// ── DEBUG DOOR NUDGE ──────────────────────────────────────────────────────
+// Refs to the visible marker meshes so we can reposition them live
+let _dbgSphere = null;
+let _dbgCol    = null;
+
+function nudgeDoorTrigger() {
+  if (!DEBUG_DOOR || indoor) return;
+  const step = 0.5;
+  let moved = false;
+  if (keys['KeyI']) { DOOR_EXT.z -= step; moved = true; }
+  if (keys['KeyK']) { DOOR_EXT.z += step; moved = true; }
+  if (keys['KeyJ']) { DOOR_EXT.x -= step; moved = true; }
+  if (keys['KeyL']) { DOOR_EXT.x += step; moved = true; }
+
+  if (moved) {
+    // Clamp key repeat so each press moves exactly one step
+    keys['KeyI'] = keys['KeyK'] = keys['KeyJ'] = keys['KeyL'] = false;
+
+    if (_dbgSphere) { _dbgSphere.position.x = DOOR_EXT.x; _dbgSphere.position.z = DOOR_EXT.z; }
+    if (_dbgCol)    { _dbgCol.position.x    = DOOR_EXT.x; _dbgCol.position.z    = DOOR_EXT.z; }
+
+    const x = DOOR_EXT.x.toFixed(2);
+    const z = DOOR_EXT.z.toFixed(2);
+    debugDoorEl.innerHTML =
+      `🔴 DOOR TRIGGER DEBUG<br>` +
+      `I/K = Z  ·  J/L = X<br>` +
+      `X: ${x}  Z: ${z}<br>` +
+      `<small>Copy this when done ↓</small><br>` +
+      `DOOR_EXT.set(${x}, 0, ${z})`;
+    console.log(`[CozyC] DOOR_EXT.set(${x}, 0, ${z})`);
+  }
+}
+
+function initDebugDoorUI() {
+  if (!DEBUG_DOOR) return;
+  debugDoorEl.style.display = 'block';
+  const x = DOOR_EXT.x.toFixed(2);
+  const z = DOOR_EXT.z.toFixed(2);
+  debugDoorEl.innerHTML =
+    `🔴 DOOR TRIGGER DEBUG<br>` +
+    `I/K = move Z  ·  J/L = move X<br>` +
+    `X: ${x}  Z: ${z}<br>` +
+    `<small>Walk up to the door, nudge red marker onto it</small>`;
+}
+
+// ── BED POSITION DEBUG ────────────────────────────────────────────────────
+// Persistent offsets from BED_POS; tuned interactively while resting.
+let _bedOX = -0.35, _bedOY = -1.35, _bedOZ = 0.20; // tuned to bed surface
+
+function _updateBedHUD() {
+  const ox = _bedOX.toFixed(2), oy = _bedOY.toFixed(2), oz = _bedOZ.toFixed(2);
+  debugBedEl.innerHTML =
+    `🔵 BED POSITION DEBUG<br>` +
+    `I/K = Y (up/down)  ·  J/L = X  ·  U/O = Z<br>` +
+    `offset  X:${ox}  Y:${oy}  Z:${oz}<br>` +
+    `<small>Copy when done ↓</small><br>` +
+    `_bedOX=${ox}; _bedOY=${oy}; _bedOZ=${oz};`;
+  console.log(`[CozyC] bed offset  _bedOX=${ox}; _bedOY=${oy}; _bedOZ=${oz};`);
+}
+
+function nudgeBedPosition() {
+  if (!DEBUG_BED || !resting) return;
+  const step = 0.05;
+  let moved = false;
+  if (keys['KeyI']) { _bedOY += step; moved = true; keys['KeyI'] = false; }
+  if (keys['KeyK']) { _bedOY -= step; moved = true; keys['KeyK'] = false; }
+  if (keys['KeyJ']) { _bedOX -= step; moved = true; keys['KeyJ'] = false; }
+  if (keys['KeyL']) { _bedOX += step; moved = true; keys['KeyL'] = false; }
+  if (keys['KeyU']) { _bedOZ -= step; moved = true; keys['KeyU'] = false; }
+  if (keys['KeyO']) { _bedOZ += step; moved = true; keys['KeyO'] = false; }
+  if (!moved) return;
+  playerGroup.position.set(
+    BED_POS.x + _bedOX,
+    BED_SURFACE_Y + _bedOY,
+    BED_POS.z + _bedOZ
+  );
+  _updateBedHUD();
+}
+
 // ── MOVEMENT ──────────────────────────────────────────────────────────────
 const _dir       = new THREE.Vector3();
 const BOUNDS_EXT = { minX: -14, maxX: 14, minZ: -14, maxZ: 14 };
-const BOUNDS_INT = { minX: -3.0, maxX: 3.0, minZ: -2.4, maxZ: 2.6 };
+let   BOUNDS_INT = { minX: -3.0, maxX: 3.0, minZ: -2.4, maxZ: 2.6 }; // updated after room loads
 
 function movePlayer(bounds, dt) {
+  if (resting) { if (mixer) mixer.update(dt); return; } // frozen on bed
   _dir.set(0, 0, 0);
   if (keys['KeyW'] || keys['ArrowUp'])    _dir.z -= 1;
   if (keys['KeyS'] || keys['ArrowDown'])  _dir.z += 1;
@@ -445,7 +634,9 @@ function handleInteract() {
   if (!indoor) {
     if (pos.distanceTo(DOOR_EXT) < 2.2) enterHouse();
   } else {
+    if (resting) { standUp(); return; }
     if (pos.distanceTo(DOOR_INT) < 1.6) { exitHouse(); return; }
+    if (BED_POS && pos.distanceTo(BED_POS) < 1.8) { sitOnBed(); return; }
     if (!hasItem && pickupMesh) {
       const sw = new THREE.Vector3();
       pickupMesh.getWorldPosition(sw);
@@ -460,22 +651,73 @@ function handleInteract() {
   }
 }
 
+// ── BED INTERACTION ───────────────────────────────────────────────────────
+function sitOnBed() {
+  if (!BED_POS) return;
+  resting = true;
+  if (walkAction) walkAction.timeScale = 0;
+
+  if (charModel) {
+    // Clear the standing foot-offset so the pivot is at the model's geometric centre
+    charModel.position.y = 0;
+    // Rotate 90° around X → character lies flat, chest facing up
+    charModel.rotation.x = -Math.PI / 2;
+  }
+
+  // Place group using current debug offsets (tune with I/J/K/L/U/O while resting)
+  playerGroup.position.set(
+    BED_POS.x + _bedOX,
+    BED_SURFACE_Y + _bedOY,
+    BED_POS.z + _bedOZ
+  );
+  if (DEBUG_BED) { debugBedEl.style.display = 'block'; _updateBedHUD(); }
+
+  // Cinematic side-angle orbit to show the lying pose
+  orbitTheta  = playerGroup.rotation.y + Math.PI * 0.6;
+  orbitPhi    = 1.1;
+  ORBIT_R     = 2.8;
+  orbitActive = true;
+
+  msgEl.textContent = '💤 Zzz...  Press E to wake up';
+  msgEl.style.display = 'block';
+  if (msgTimer) { clearTimeout(msgTimer); msgTimer = null; }
+
+  controlsEl.innerHTML = 'Drag — Look around<br>Scroll — Zoom<br>E — Wake up';
+}
+
+function standUp() {
+  resting     = false;
+  orbitActive = false;
+  _drag       = false;
+  if (charModel) {
+    charModel.rotation.x = 0;
+    charModel.position.y = _charModelOrigY; // restore standing foot-offset
+  }
+  playerGroup.position.y = 0;
+  msgEl.style.display = 'none';
+  debugBedEl.style.display = 'none';
+  controlsEl.innerHTML = 'WASD / ↑↓←→ — Move<br>E — Interact';
+}
+
 function enterHouse() {
   indoor = true;
   extScene.remove(playerGroup);
   intScene.add(playerGroup);
-  playerGroup.position.set(0, 0, 2.0);
+  playerGroup.position.set(0, 0, 0);
   playerGroup.rotation.y = 0;
+  playerGroup.scale.setScalar(0.55); // shrink to fit room proportions
   locEl.textContent = '🏠 Inside Your House';
   showMsg('Welcome home! Press E near the door to leave.');
 }
 
 function exitHouse() {
+  if (resting) standUp();
   indoor = false;
   intScene.remove(playerGroup);
   extScene.add(playerGroup);
-  playerGroup.position.set(0, 0, -2.5);
+  playerGroup.position.set(-7.00, 0, -1.8);
   playerGroup.rotation.y = Math.PI;
+  playerGroup.scale.setScalar(1.0); // restore full size outside
   locEl.textContent = '🌿 Cozy Garden';
 }
 
@@ -488,6 +730,8 @@ function updateHints() {
   } else {
     if (pos.distanceTo(DOOR_INT) < 1.6) {
       hint = 'Press E to go outside';
+    } else if (BED_POS && !resting && pos.distanceTo(BED_POS) < 1.8) {
+      hint = 'Press E to rest on the bed';
     } else if (!hasItem && pickupMesh) {
       const sw = new THREE.Vector3();
       pickupMesh.getWorldPosition(sw);
@@ -499,10 +743,27 @@ function updateHints() {
 }
 
 // ── CAMERA ────────────────────────────────────────────────────────────────
+const _orbitTarget = new THREE.Vector3();
+const _orbitPos    = new THREE.Vector3();
+
 function updateCamera() {
   const t = playerGroup.position;
-  camera.position.lerp(t.clone().add(CAM_OFFSET), 0.1);
-  camera.lookAt(t.x, t.y + 1, t.z);
+
+  if (orbitActive) {
+    // Orbit around the character's centre (slightly above feet)
+    _orbitTarget.set(t.x, t.y + 0.5, t.z);
+    _orbitPos.set(
+      _orbitTarget.x + ORBIT_R * Math.sin(orbitPhi) * Math.sin(orbitTheta),
+      _orbitTarget.y + ORBIT_R * Math.cos(orbitPhi),
+      _orbitTarget.z + ORBIT_R * Math.sin(orbitPhi) * Math.cos(orbitTheta)
+    );
+    camera.position.lerp(_orbitPos, 0.08);
+    camera.lookAt(_orbitTarget);
+  } else {
+    const offset = indoor ? CAM_OFFSET_INT : CAM_OFFSET_EXT;
+    camera.position.lerp(t.clone().add(offset), 0.1);
+    camera.lookAt(t.x, t.y + 1, t.z);
+  }
 }
 
 // ── ANIMATE ITEMS ─────────────────────────────────────────────────────────
@@ -534,13 +795,15 @@ function tick() {
   updateCamera();
   handleInteract();
   updateHints();
+  nudgeDoorTrigger();
+  nudgeBedPosition();
 }
 
 // ── INIT ──────────────────────────────────────────────────────────────────
 buildExterior();
-buildInterior();
-loadCharacter();             // both call _onAssetLoaded(); tick() fires when both finish
+loadCharacter();             // all three call _onAssetLoaded(); tick() fires when all finish
 loadEnvironment(_onAssetLoaded);
+loadInterior(_onAssetLoaded);
 </script>
 </body>
 </html>
