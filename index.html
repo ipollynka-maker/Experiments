@@ -213,7 +213,7 @@ function buildColliders(model) {
       hMesh.push(m);
       return;
     }
-    for (const [kwds] of _COL_CYL) {
+    for (const kwds of _COL_CYL) {
       if (kwds.some(k => n.includes(k))) {
         raw.push({ x: wp.x, z: wp.z, r: Math.max(0.3, foot * 0.45) });
         return;
