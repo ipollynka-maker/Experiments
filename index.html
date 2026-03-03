@@ -106,7 +106,7 @@ const MODEL_SCALE = 0.01;
 // Rotation to face +Z (adjust if character walks backward)
 const MODEL_FACE  = 0;
 // Set true to show a red wireframe sphere at the door trigger (tune & disable)
-const DEBUG_DOOR  = true; // retune after new map loads, then set false
+const DEBUG_DOOR  = false;
 // Set true to show bed-position nudge HUD while resting (tune & disable)
 const DEBUG_BED   = false;
 
@@ -345,7 +345,7 @@ function loadEnvironment(onDone) {
       // ── Auto-detect door trigger ──────────────────────────────────────
       const finalBbox = new THREE.Box3().setFromObject(model);
       DOOR_EXT = findDoorTrigger(model, finalBbox);
-      // DOOR_EXT.set(-7.00, 0, -3.19); // old position — retune with I/J/K/L
+      DOOR_EXT.set(0.65, 0, 2.00); // tuned to house_2 door position
 
       // ── Debug: show a moveable red marker at the trigger ────────────────
       if (DEBUG_DOOR) {
@@ -386,7 +386,6 @@ let walkAction      = null;
 let charModel       = null;  // direct ref to model inside playerGroup
 let _charModelOrigY = 0;     // saved foot-offset, restored after lying down
 let BED_SURFACE_Y   = 0.4;   // world Y of bed top surface, measured after room loads
-let treeMixer       = null;  // AnimationMixer for the animated tree
 
 let _loadedCount = 0;
 function _onAssetLoaded() {
@@ -723,7 +722,7 @@ function exitHouse() {
   indoor = false;
   intScene.remove(playerGroup);
   extScene.add(playerGroup);
-  playerGroup.position.set(-7.00, 0, -1.8);
+  playerGroup.position.set(0.65, 0, 3.2);
   playerGroup.rotation.y = Math.PI;
   playerGroup.scale.setScalar(1.0); // restore full size outside
   locEl.textContent = '🌿 Cozy Garden';
@@ -797,7 +796,6 @@ function tick() {
     renderer.render(intScene, camera);
   } else {
     movePlayer(BOUNDS_EXT, dt);
-    if (treeMixer) treeMixer.update(dt);
     renderer.render(extScene, camera);
   }
 
@@ -808,49 +806,12 @@ function tick() {
   nudgeBedPosition();
 }
 
-// ── TREE (GLTF, animated) ─────────────────────────────────────────────────
-// Loads independently — doesn't block game start, just appears when ready.
-function loadTree() {
-  const loader = new GLTFLoader();
-  loader.load(
-    'animal_crossing_tree/scene.gltf',
-    (gltf) => {
-      const model = gltf.scene;
-      model.traverse(m => {
-        if (m.isMesh) { m.castShadow = true; m.receiveShadow = true; }
-      });
-
-      // Scale to a sensible height (~4 units tall)
-      const bbox = new THREE.Box3().setFromObject(model);
-      const sc   = 4 / (bbox.max.y - bbox.min.y);
-      model.scale.setScalar(sc);
-
-      // Place near the house — adjust position after seeing it in-game
-      model.position.set(4, 0, -4);
-
-      extScene.add(model);
-
-      // Loop the "Shake" animation
-      if (gltf.animations.length > 0) {
-        treeMixer = new THREE.AnimationMixer(model);
-        const action = treeMixer.clipAction(gltf.animations[0]); // "Shake"
-        action.setLoop(THREE.LoopRepeat, Infinity);
-        action.play();
-      }
-
-      console.log('[CozyC] Tree loaded with Shake animation');
-    },
-    undefined,
-    (err) => console.error('Tree load error:', err)
-  );
-}
 
 // ── INIT ──────────────────────────────────────────────────────────────────
 buildExterior();
 loadCharacter();             // all three call _onAssetLoaded(); tick() fires when all finish
 loadEnvironment(_onAssetLoaded);
 loadInterior(_onAssetLoaded);
-loadTree();                  // non-blocking — appears when ready
 </script>
 </body>
 </html>
