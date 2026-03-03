@@ -184,6 +184,99 @@ function addLight(scene, indoor) {
   scene.add(sun);
 }
 
+// ── COLLIDERS ─────────────────────────────────────────────────────────────
+const colliders = [];
+
+// Keywords that map to a shape type
+const _COL_CYL = [
+  ['tree_', 'tree_base'],          // trees   → cylinder r=0.55
+  ['bush'],                         // bushes  → cylinder r=0.45
+  ['rock', 'rocas'],               // rocks   → cylinder r=0.4
+  ['mailbox'],                      // mailbox → cylinder r=0.3
+  ['bench'],                        // bench   → cylinder r=0.4
+];
+const _COL_HOUSE = ['house', 'roof_', 'chimney', 'window', 'door'];
+
+function buildColliders(model) {
+  const raw   = [];   // {x, z, r} before clustering
+  const hMesh = [];   // house-related meshes for one combined box
+
+  model.traverse(m => {
+    if (!m.isMesh) return;
+    const n    = m.name.toLowerCase();
+    const wp   = new THREE.Vector3();
+    m.getWorldPosition(wp);
+    const bb   = new THREE.Box3().setFromObject(m);
+    const foot = Math.max(bb.max.x - bb.min.x, bb.max.z - bb.min.z);
+
+    if (_COL_HOUSE.some(k => n.includes(k))) {
+      hMesh.push(m);
+      return;
+    }
+    for (const [kwds] of _COL_CYL) {
+      if (kwds.some(k => n.includes(k))) {
+        raw.push({ x: wp.x, z: wp.z, r: Math.max(0.3, foot * 0.45) });
+        return;
+      }
+    }
+  });
+
+  // Cluster cylinder colliders — merge anything within 0.9 units
+  const clusters = [];
+  for (const pt of raw) {
+    let found = false;
+    for (const cl of clusters) {
+      if (Math.hypot(pt.x - cl.x, pt.z - cl.z) < 0.9) {
+        cl.r = Math.max(cl.r, pt.r);
+        found = true; break;
+      }
+    }
+    if (!found) clusters.push({ ...pt });
+  }
+  clusters.forEach(c => colliders.push({ type: 'cyl', x: c.x, z: c.z, r: c.r }));
+
+  // One box collider for the whole house structure
+  if (hMesh.length > 0) {
+    const hb = new THREE.Box3();
+    hMesh.forEach(m => hb.expandByObject(m));
+    colliders.push({ type: 'box', minX: hb.min.x, maxX: hb.max.x, minZ: hb.min.z, maxZ: hb.max.z });
+  }
+
+  console.log(`[CozyC] Colliders built: ${clusters.length} cylinders, ${hMesh.length > 0 ? 1 : 0} house box`);
+}
+
+function resolveCollisions() {
+  if (indoor) return;
+  const p  = playerGroup.position;
+  const PR = 0.4; // player collision radius
+
+  for (const c of colliders) {
+    if (c.type === 'cyl') {
+      const dx   = p.x - c.x;
+      const dz   = p.z - c.z;
+      const dist = Math.sqrt(dx * dx + dz * dz);
+      const min  = PR + c.r;
+      if (dist < min && dist > 0.001) {
+        const push = (min - dist) / dist;
+        p.x += dx * push;
+        p.z += dz * push;
+      }
+    } else if (c.type === 'box') {
+      const x0 = c.minX - PR, x1 = c.maxX + PR;
+      const z0 = c.minZ - PR, z1 = c.maxZ + PR;
+      if (p.x > x0 && p.x < x1 && p.z > z0 && p.z < z1) {
+        const dL = p.x - x0, dR = x1 - p.x;
+        const dF = p.z - z0, dB = z1 - p.z;
+        const mn = Math.min(dL, dR, dF, dB);
+        if      (mn === dL) p.x = x0;
+        else if (mn === dR) p.x = x1;
+        else if (mn === dF) p.z = z0;
+        else                p.z = z1;
+      }
+    }
+  }
+}
+
 // ── SCENES ────────────────────────────────────────────────────────────────
 const extScene = new THREE.Scene();
 extScene.background = new THREE.Color(P.sky);
@@ -341,6 +434,7 @@ function loadEnvironment(onDone) {
       model.position.y = -bbox.min.y;
 
       extScene.add(model);
+      buildColliders(model);
 
       // ── Auto-detect door trigger ──────────────────────────────────────
       const finalBbox = new THREE.Box3().setFromObject(model);
@@ -796,6 +890,7 @@ function tick() {
     renderer.render(intScene, camera);
   } else {
     movePlayer(BOUNDS_EXT, dt);
+    resolveCollisions();
     renderer.render(extScene, camera);
   }
 
